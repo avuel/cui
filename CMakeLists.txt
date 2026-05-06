@@ -1,11 +1,9 @@
 cmake_minimum_required(VERSION 4.0.0)
-project(cui LANGUAGES C)
+project(cui_top)
 
-add_executable(${PROJECT_NAME} main.c)
+add_subdirectory(vendor/nuklear_sdl)
 
-set_target_properties(${PROJECT_NAME}
-        PROPERTIES
-            C_STANDARD 99
-            C_STANDARD_REQUIRED ON
-            C_EXTENSIONS OFF
-)
+set(PLATFORM "SDL" CACHE STRING "" FORCE)
+add_subdirectory(vendor/raylib)
+
+add_subdirectory(src)
