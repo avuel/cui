@@ -1,26 +1,27 @@
-cbuffer UBO : register(b0, space1)
-{
-    float4x4 transform : packoffset(c0);
-};
+// cbuffer UBO : register(b0, space1)
+// {
+//     float4x4 transform : packoffset(c0);
+// };
 
-struct input_vs
-{
+struct vs_input {
     float3 position : TEXCOORD0;
     float4 color : TEXCOORD1;
 };
 
-struct output_vs
-{
+struct vs_output {
     float4 color : TEXCOORD0;
     float4 position : SV_Position;
 };
 
-output_vs vs_main(input_vs input)
+vs_output vs_main(vs_input input)
 {
-    output_vs output;
+    vs_output output;
 
     output.color = input.color;
-    output.position = mul(transform, float4(input.position, 1.0f));
+    output.position = float4(input.position, 1.0f);
+
+//     output.color = input.color;
+//     output.position = mul(transform, float4(input.position, 1.0f));
 
     return output;
 }

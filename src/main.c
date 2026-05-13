@@ -1,10 +1,9 @@
+#include <cglm/cglm.h>
+
 #define SDL_MAIN_USE_CALLBACKS
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_gpu.h>
-
-#include "nuklear_sdl_renderer.h"
-
-#include <stdio.h>
+#include <nuklear_sdl_renderer.h>
 
 #define WINDOW_WIDTH  1920
 #define WINDOW_HEIGHT 1080
@@ -77,7 +76,7 @@ struct nk_sdl_app {
     enum nk_anti_aliasing AA;
 };
 
-typedef struct position{
+typedef struct position {
     float x, y, z;
 } position;
 
@@ -85,8 +84,7 @@ typedef struct color {
     Uint8 r, g, b, a;
 } color;
 
-typedef struct vertex_position_color
-{
+typedef struct vertex_position_color {
     position position;
     color color;
 } vertex_position_color;
@@ -185,7 +183,8 @@ SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
         .num_samplers = 0,
         .num_storage_textures = 0,
         .num_storage_buffers = 0,
-        .num_uniform_buffers = 1,
+        // .num_uniform_buffers = 1, // TODO: add back
+        .num_uniform_buffers = 0,
         .props = 0,
     };
 
@@ -217,7 +216,8 @@ SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
         .num_samplers = 0,
         .num_storage_textures = 0,
         .num_storage_buffers = 0,
-        .num_uniform_buffers = 1,
+        // .num_uniform_buffers = 1, // TODO: add back
+        .num_uniform_buffers = 0,
         .props = 0,
     };
 
@@ -231,23 +231,23 @@ SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
     }
 
     const SDL_GPUGraphicsPipelineCreateInfo graphics_pipeline_create_info = {
-        .vertex_shader = gpu_shader_vertex,
+        .vertex_shader   = gpu_shader_vertex,
         .fragment_shader = gpu_shader_pixel,
+        .primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
         .vertex_input_state = {
+            .num_vertex_buffers = 1,
             .vertex_buffer_descriptions = (const SDL_GPUVertexBufferDescription[]) {
                 { .slot = 0, .pitch = sizeof(vertex_position_color), .input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX, .instance_step_rate = 0 },
             },
-            .num_vertex_buffers = 1,
+            .num_vertex_attributes = 2,
             .vertex_attributes = (const SDL_GPUVertexAttribute[]) {
-                    { .location = 0, .buffer_slot = 0, .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,      .offset = 0, },
+                    { .location = 0, .buffer_slot = 0, .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,      .offset = 0,                },
                     { .location = 1, .buffer_slot = 0, .format = SDL_GPU_VERTEXELEMENTFORMAT_UBYTE4_NORM, .offset = sizeof(position), },
             },
-            .num_vertex_attributes = 2,
         },
-        .primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
         .rasterizer_state = {
             .fill_mode = SDL_GPU_FILLMODE_FILL,
-            .cull_mode = SDL_GPU_CULLMODE_BACK,
+            .cull_mode = SDL_GPU_CULLMODE_NONE, // TODO: cull back faces
             .front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE,
             .depth_bias_constant_factor = 0.0f,
             .depth_bias_clamp = 0.0f,
@@ -257,12 +257,12 @@ SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
         },
         .multisample_state = {
             .sample_count = 0,
-            .sample_mask = 0,
-            .enable_mask = false,
+            .sample_mask  = 0,
+            .enable_mask  = false,
             .enable_alpha_to_coverage = false,
         },
         .depth_stencil_state = {
-            .compare_op = SDL_GPU_COMPAREOP_LESS,
+            .compare_op = SDL_GPU_COMPAREOP_INVALID,
             .back_stencil_state = {
                 .fail_op       = SDL_GPU_STENCILOP_INVALID,
                 .pass_op       = SDL_GPU_STENCILOP_INVALID,
@@ -276,18 +276,19 @@ SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
                 .compare_op    = SDL_GPU_COMPAREOP_INVALID,
             },
             .compare_mask = 0,
-            .write_mask   = 0xFF,
-            .enable_depth_test = true,
-            .enable_depth_write = true,
+            .write_mask   = 0,
+            .enable_depth_test   = false,
+            .enable_depth_write  = false,
             .enable_stencil_test = false,
         },
         .target_info = {
-            .color_target_descriptions = (const SDL_GPUColorTargetDescription[]) {
-                { .format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM },
-            },
             .num_color_targets = 1,
-            .depth_stencil_format = SDL_GPU_TEXTUREFORMAT_INVALID,
+            .color_target_descriptions = (const SDL_GPUColorTargetDescription[]) {
+                // { .format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM }, // FIXME: which format?
+                { .format = SDL_GetGPUSwapchainTextureFormat(app->device, app->window), },
+            },
             .has_depth_stencil_target = false,
+            .depth_stencil_format = SDL_GPU_TEXTUREFORMAT_INVALID,
         },
     };
 
@@ -304,6 +305,115 @@ SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
         return SDL_APP_FAILURE;
     }
 
+    // create buffers for cube and upload data
+    {
+        // create vertex buffer
+        const SDL_GPUBufferCreateInfo buffer_vertex_create_info = {
+            .usage = SDL_GPU_BUFFERUSAGE_VERTEX,
+            .size  = 3 * sizeof(vertex_position_color),
+            .props = 0,
+        };
+        app->buffer_vertex = SDL_CreateGPUBuffer(app->device, &buffer_vertex_create_info);
+        if (NULL == app->buffer_vertex)
+        {
+            log_fat("create vertex buffer failed %s", SDL_GetError());
+            return SDL_APP_FAILURE;
+        }
+
+        // create index buffer
+        const SDL_GPUBufferCreateInfo buffer_index_create_info = {
+            .usage = SDL_GPU_BUFFERUSAGE_INDEX,
+            .size  = 3 * sizeof(Uint16),
+            .props = 0,
+        };
+        app->buffer_index = SDL_CreateGPUBuffer(app->device, &buffer_index_create_info);
+        if (NULL == app->buffer_index)
+        {
+            log_fat("create index buffer failed %s", SDL_GetError());
+            return SDL_APP_FAILURE;
+        }
+
+        // create gpu transfer buffer
+        const SDL_GPUTransferBufferCreateInfo gpu_transfer_buffer_create_info = {
+            .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
+            .size  = buffer_vertex_create_info.size + buffer_index_create_info.size,
+            .props = 0
+        };
+        SDL_GPUTransferBuffer* gpu_transfer_buffer = SDL_CreateGPUTransferBuffer(app->device, &gpu_transfer_buffer_create_info);
+        if (NULL == gpu_transfer_buffer)
+        {
+            log_fat("create gpu transfer buffer failed %s", SDL_GetError());
+            return SDL_APP_FAILURE;
+        }
+
+        vertex_position_color* gpu_transfer_buffer_data = SDL_MapGPUTransferBuffer(app->device, gpu_transfer_buffer, false);
+        if (NULL == gpu_transfer_buffer_data)
+        {
+            log_fat("map gpu transfer buffer failed %s", SDL_GetError());
+            return SDL_APP_FAILURE;
+        }
+
+        vertex_position_color* vertex_data = gpu_transfer_buffer_data;
+        vertex_data[0]  = (vertex_position_color) { .position = { .x = -1.0f, .y = -1.0f, .z =  0.0f, }, .color = { .r = 255, .g =   0, .b =   0, .a = 255} };
+        vertex_data[1]  = (vertex_position_color) { .position = { .x =  1.0f, .y = -1.0f, .z =  0.0f, }, .color = { .r =   0, .g = 255, .b =   0, .a = 255} };
+        vertex_data[2]  = (vertex_position_color) { .position = { .x =  0.0f, .y =  1.0f, .z =  0.0f, }, .color = { .r =   0, .g =   0, .b = 255, .a = 255} };
+
+        Uint16* index_data = (Uint16*)(&vertex_data[3]);
+        Uint16 indices[3] = {
+            0,  1,  2,
+       };
+        SDL_memcpy(index_data, indices, sizeof(indices));
+
+        SDL_UnmapGPUTransferBuffer(app->device, gpu_transfer_buffer);
+
+        SDL_GPUCommandBuffer* command_buffer = SDL_AcquireGPUCommandBuffer(app->device);
+        if (NULL == command_buffer)
+        {
+            log_fat("acquire command buffer failed %s", SDL_GetError());
+            return SDL_APP_FAILURE;
+        }
+
+        SDL_GPUCopyPass* copy_pass = SDL_BeginGPUCopyPass(command_buffer);
+        {
+            // copy vertex data
+            const SDL_GPUTransferBufferLocation gpu_transfer_buffer_location_vertex = {
+                .transfer_buffer = gpu_transfer_buffer,
+                .offset = 0,
+            };
+            const SDL_GPUBufferRegion gpu_transfer_buffer_region_vertex = {
+                .buffer = app->buffer_vertex,
+                .offset = 0,
+                .size   = buffer_vertex_create_info.size,
+            };
+            SDL_UploadToGPUBuffer(copy_pass, &gpu_transfer_buffer_location_vertex, &gpu_transfer_buffer_region_vertex, false);
+
+            // copy index data
+            const SDL_GPUTransferBufferLocation gpu_transfer_buffer_location_index = {
+                .transfer_buffer = gpu_transfer_buffer,
+                .offset          = buffer_vertex_create_info.size,
+            };
+            const SDL_GPUBufferRegion gpu_transfer_buffer_region_index = {
+                .buffer = app->buffer_index,
+                .offset = 0,
+                .size   = buffer_index_create_info.size,
+            };
+            SDL_UploadToGPUBuffer(copy_pass, &gpu_transfer_buffer_location_index, &gpu_transfer_buffer_region_index, false);
+        }
+        SDL_EndGPUCopyPass(copy_pass);
+
+        // submit command buffer
+        const bool success = SDL_SubmitGPUCommandBuffer(command_buffer);
+
+        SDL_ReleaseGPUTransferBuffer(app->device, gpu_transfer_buffer);
+
+        if (!success)
+        {
+            log_fat("submit command buffer failed: %s", SDL_GetError());
+            return SDL_APP_FAILURE;
+        }
+    }
+
+#if 0
     // create buffers for cube and upload data
     {
         // create vertex buffer
@@ -351,6 +461,7 @@ SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
             log_fat("map gpu transfer buffer failed %s", SDL_GetError());
             return SDL_APP_FAILURE;
         }
+
 
         vertex_position_color* vertex_data = gpu_transfer_buffer_data;
         vertex_data[0]  = (vertex_position_color) { .position = { .x = -10, .y = -10, .z = -10, }, .color = { .r = 255, .g =   0, .b =   0, .a = 255} };
@@ -444,12 +555,13 @@ SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
             return SDL_APP_FAILURE;
         }
     }
+#endif
 
-#if 0
     app->bg.r = 0.10f;
     app->bg.g = 0.18f;
     app->bg.b = 0.24f;
     app->bg.a = 1.0f;
+#if 0
 
     // float font_scale = 1.0f;
     // {
@@ -586,15 +698,32 @@ SDL_AppResult SDL_AppIterate(void* appstate)
     {
         const float clip_planes[2] = { 20.0f, 60.0f };
 
-        // TODO: create proj matrix
-        // TODO: create view matrix
-        // TODO: create view * proj matrix
+        mat4 matrix_projection = { 0 };
+        glm_perspective(
+            75.0f * SDL_PI_F / 180.0f,
+            (float)((double)WINDOW_WIDTH / (double)WINDOW_HEIGHT),
+            clip_planes[0],
+            clip_planes[1],
+            matrix_projection
+        );
+
+        mat4 matrix_view = { 0 };
+        glm_lookat(
+            // (vec3) { SDL_cosf(time_delta) * 30.0f, 30.0f, SDL_sinf(time_delta) * 30.0f },
+            (vec3) { SDL_cosf(0.0f) * 30.0f, 30.0f, SDL_sinf(0.0f) * 30.0f },
+            (vec3) { 0.0f, 0.0f, 0.0f },
+            (vec3) { 0.0f, 1.0f, 0.0f},
+            matrix_view
+        );
+
+        mat4 matrix_view_projection = { 0 };
+        glm_mat4_mul(matrix_projection, matrix_view, matrix_view_projection);
 
         const SDL_GPUColorTargetInfo color_target_info = {
             .texture = swapchain_texture,
             .mip_level = 0,
             .layer_or_depth_plane = 0,
-            .clear_color = { .r = 0.0f, .g = 0.0f, .b = 0.0f, .a = 1.0f },
+            .clear_color = { .r = app->bg.r, .g = app->bg.g, .b = app->bg.b, .a = app->bg.a },
             .load_op = SDL_GPU_LOADOP_CLEAR,
             .store_op = SDL_GPU_STOREOP_STORE,
             .resolve_texture = NULL,
@@ -606,11 +735,28 @@ SDL_AppResult SDL_AppIterate(void* appstate)
 
         SDL_GPURenderPass* render_pass = SDL_BeginGPURenderPass(command_buffer, &color_target_info, 1, NULL);
         {
-            // TODO: upload view * projection matrix
-            //SDL_PushGPUVertexUniformData(command_buffer, 0, view * proj matrix, sizeof(view * proj matrix));
-            SDL_PushGPUFragmentUniformData(command_buffer, 0, clip_planes, sizeof(clip_planes));
+            // bind vertex buffer
+            const SDL_GPUBufferBinding buffer_vertex_binding = {
+                .buffer = app->buffer_vertex,
+                .offset = 0,
+            };
+            SDL_BindGPUVertexBuffers(render_pass, 0, &buffer_vertex_binding, 1);
+
+            // bind index buffer
+            const SDL_GPUBufferBinding buffer_index_binding = {
+                .buffer = app->buffer_index,
+                .offset = 0,
+            };
+            SDL_BindGPUIndexBuffer(render_pass, &buffer_index_binding, SDL_GPU_INDEXELEMENTSIZE_16BIT);
+
+            // bind graphics pipeline
             SDL_BindGPUGraphicsPipeline(render_pass, app->pipeline);
-            SDL_DrawGPUIndexedPrimitives(render_pass, 36, 1, 0, 0 , 0);
+            // SDL_PushGPUVertexUniformData(command_buffer, 0, matrix_view_projection, sizeof(matrix_view_projection));
+            // SDL_PushGPUFragmentUniformData(command_buffer, 0, clip_planes, sizeof(clip_planes));
+            // SDL_DrawGPUIndexedPrimitives(render_pass, 36, 1, 0, 0, 0);
+
+            // draw
+            SDL_DrawGPUIndexedPrimitives(render_pass, 3, 1, 0, 0, 0);
         }
         SDL_EndGPURenderPass(render_pass);
     }
