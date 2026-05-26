@@ -32,6 +32,7 @@ add_dependencies(${PROJECT_NAME} cui_shaders)
 target_sources(${PROJECT_NAME}
         PRIVATE
             main.c
+            camera.c
 )
 
 set_target_properties(${PROJECT_NAME}

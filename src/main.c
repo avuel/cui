@@ -1,13 +1,13 @@
-#include <cglm/cglm.h>
-
 #define SDL_MAIN_USE_CALLBACKS
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_gpu.h>
 #include <nuklear_sdl_renderer.h>
 
+#include "camera.h"
+
 #define WINDOW_TITLE  "cui"
-#define WINDOW_WIDTH  1600
-#define WINDOW_HEIGHT 900
+#define WINDOW_WIDTH  1920
+#define WINDOW_HEIGHT 1080
 
 #define COLOR_RED    "\033[0;31m"
 #define COLOR_CYAN   "\033[0;36m"
@@ -68,12 +68,18 @@ do {                                                                            
 struct nk_sdl_app {
     SDL_GPUDevice* device;
     SDL_Window* window;
+    SDL_Renderer* renderer;
     SDL_GPUGraphicsPipeline* pipeline;
     SDL_GPUBuffer* buffer_vertex;
     SDL_GPUBuffer* buffer_index;
     struct nk_context* ctx;
     struct nk_colorf bg;
     enum nk_anti_aliasing AA;
+
+    SDL_Mutex* mouse_mutex;
+    vec2 mouse_motion;
+
+    camera camera;
 };
 
 typedef struct position {
@@ -88,6 +94,8 @@ typedef struct vertex_position_color {
     position position;
     color color;
 } vertex_position_color;
+
+// #define NUKLEAR
 
 SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
 {
@@ -142,20 +150,7 @@ SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
         return SDL_APP_FAILURE;
     }
 
-    // app->renderer = NULL;
-    // if (!SDL_CreateWindowAndRenderer("Nuklear: SDL3 Renderer", WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_HIDDEN, &app->window, &app->renderer))
-    // {
-    //     SDL_free(app);
-    //     return SDL_APP_FAILURE;
-    // }
-
     *appstate = app;
-
-    // if (!SDL_SetRenderVSync(app->renderer, 1))
-    // {
-    //     log_fat("SDL_SetRenderVSync failed: %s", SDL_GetError());
-    //     return SDL_APP_FAILURE;
-    // }
 
     if (!SDL_ClaimWindowForGPUDevice(app->device, app->window))
     {
@@ -415,7 +410,7 @@ SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
             // bottom
             20, 21, 22,
             23, 22, 21,
-       };
+        };
         SDL_memcpy(index_data, indices, sizeof(indices));
 
         SDL_UnmapGPUTransferBuffer(app->device, gpu_transfer_buffer);
@@ -471,20 +466,20 @@ SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
     app->bg.g = 0.18f;
     app->bg.b = 0.24f;
     app->bg.a = 1.0f;
-#if 0
 
-    // float font_scale = 1.0f;
-    // {
-    //     /* This scaling logic was kept simple for the demo purpose.
-    //      * On some platforms, this might not be the exact scale
-    //      * that you want to use. For more information, see:
-    //      * https://wiki.libsdl.org/SDL3/README-highdpi */
-    //     const float scale = SDL_GetWindowDisplayScale(app->window);
-    //     SDL_SetRenderScale(app->renderer, scale, scale);
-    //     font_scale = scale;
-    // }
-    //
-    // app->ctx = nk_sdl_init(app->window, app->renderer, nk_sdl_allocator());
+#ifdef NUKLEAR
+    float font_scale = 1.0f;
+    {
+        /* This scaling logic was kept simple for the demo purpose.
+         * On some platforms, this might not be the exact scale
+         * that you want to use. For more information, see:
+         * https://wiki.libsdl.org/SDL3/README-highdpi */
+        const float scale = SDL_GetWindowDisplayScale(app->window);
+        SDL_SetRenderScale(app->renderer, scale, scale);
+        font_scale = scale;
+    }
+
+    app->ctx = nk_sdl_init(app->window, app->renderer, nk_sdl_allocator());
 
     /* set up the font atlas and add desired font; note that font sizes are
      * multiplied by font_scale to produce better results at higher DPIs */
@@ -513,6 +508,28 @@ SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
     nk_input_begin(app->ctx);
 #endif
 
+    app->camera = (camera) {
+        .position = { 0.0f, 0.0f, 10.0f },
+        .target   = { 0.0f, 0.0f, 0.0f },
+        .up       = { 0.0f, 1.0f, 0.0f },
+        .fov      = 60.0f * SDL_PI_F / 180.0f,
+        .aspect   = (float)((double)WINDOW_WIDTH / (double)WINDOW_HEIGHT),
+        .near     = 20.0f,
+        .far      = 60.0f,
+        .mode     = CAMERA_THIRD_PERSON,
+        .type     = CAMERA_PERSPECTIVE,
+    };
+
+    glm_vec2_zero(app->mouse_motion);
+    app->mouse_mutex = SDL_CreateMutex();
+
+    if (NULL == app->mouse_mutex)
+    {
+        log_fat("create mutex failed %s", SDL_GetError());
+        return SDL_APP_FAILURE;
+    }
+
+
     *appstate = app;
 
     if (!SDL_ShowWindow(app->window))
@@ -528,11 +545,45 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event* event)
 {
     struct nk_sdl_app* app = appstate;
 
+    static bool middle_down = false;
+    static vec2 mouse_position = { 0 };
+
     switch (event->type)
     {
         case SDL_EVENT_QUIT:
         {
             return SDL_APP_SUCCESS;
+        }
+
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        {
+            if (SDL_BUTTON_MIDDLE == event->button.button)
+            {
+                middle_down = true;
+            }
+            break;
+        }
+
+        case SDL_EVENT_MOUSE_BUTTON_UP:
+        {
+            if (SDL_BUTTON_MIDDLE == event->button.button)
+            {
+                middle_down = false;
+            }
+            break;
+        }
+
+        case SDL_EVENT_MOUSE_MOTION:
+        {
+            if (middle_down)
+            {
+                SDL_LockMutex(app->mouse_mutex);
+                {
+                    app->mouse_motion[0] = app->mouse_motion[0] - event->motion.xrel;
+                    app->mouse_motion[1] = app->mouse_motion[1] - event->motion.yrel;
+                }
+                SDL_UnlockMutex(app->mouse_mutex);
+            }
         }
 
         case SDL_EVENT_KEY_DOWN:
@@ -565,11 +616,11 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event* event)
         }
     }
 
+
+#ifdef NUKLEAR
     /* Remember to always rescale the event coordinates,
      * if your renderer uses custom scale. */
-    // SDL_ConvertEventToRenderCoordinates(app->renderer, event);
-
-#if 0
+    SDL_ConvertEventToRenderCoordinates(app->renderer, event);
     nk_sdl_handle_event(app->ctx, event);
 #endif
 
@@ -584,11 +635,27 @@ SDL_AppResult SDL_AppIterate(void* appstate)
     //     log_dbg("update %zu", count);
     // }
 
-    static double time_last = 0;
-    const double time_current = (double)SDL_GetTicksNS() / 1e9;
-    const float time_delta = (float)(time_current - time_last);
-
     struct nk_sdl_app* app = appstate;
+
+    vec2 mouse_delta = { 0 };
+    {
+        SDL_LockMutex(app->mouse_mutex);
+        glm_vec2_scale(app->mouse_motion, 0.25f * ((float)M_PI / 180.0f), mouse_delta);
+        glm_vec2_zero(app->mouse_motion);
+        SDL_UnlockMutex(app->mouse_mutex);
+    }
+
+    static Uint64 ticks_last = 0;
+    const Uint64 ticks_current = SDL_GetTicksNS();
+    const double time_delta = (double)(ticks_current - ticks_last) / 1e9;
+    ticks_last = ticks_current;
+
+    log_dbg("dt: %.6f", time_delta);
+
+    camera_update(&app->camera, mouse_delta);
+
+    mat4 view_projection = { 0 };
+    camera_get_transform(&app->camera, view_projection);
 
     SDL_GPUCommandBuffer* command_buffer = SDL_AcquireGPUCommandBuffer(app->device);
     if (NULL == command_buffer)
@@ -606,36 +673,6 @@ SDL_AppResult SDL_AppIterate(void* appstate)
 
     if (NULL != swapchain_texture)
     {
-        const float clip_planes[2] = { 20.0f, 60.0f };
-
-        mat4 matrix_projection = { 0 };
-        glm_perspective(
-            75.0f * SDL_PI_F / 180.0f,
-            (float)((double)WINDOW_WIDTH / (double)WINDOW_HEIGHT),
-            clip_planes[0],
-            clip_planes[1],
-            matrix_projection
-        );
-
-        mat4 matrix_view = { 0 };
-
-        const double a1 = SDL_fmod(time_current, 4.0);
-        const double a2 = SDL_fmod(time_current, 8.0);
-        const double r = 10.0;
-        const double x = r * SDL_sin(a1 * M_PI_2);
-        const double y = r * SDL_sin(a2 * M_PI_4);
-        const double z = r * SDL_cos(a1 * M_PI_2);
-
-        glm_lookat(
-            (vec3) { (float)x, (float)y, (float)z },
-            (vec3) { 0.0f, 0.0f, 0.0f },
-            (vec3) { 0.0f, 1.0f, 0.0f },
-            matrix_view
-        );
-
-        mat4 matrix_view_projection = { 0 };
-        glm_mat4_mul(matrix_projection, matrix_view, matrix_view_projection);
-
         const SDL_GPUColorTargetInfo color_target_info = {
             .texture = swapchain_texture,
             .mip_level = 0,
@@ -668,7 +705,7 @@ SDL_AppResult SDL_AppIterate(void* appstate)
 
             // bind graphics pipeline
             SDL_BindGPUGraphicsPipeline(render_pass, app->pipeline);
-            SDL_PushGPUVertexUniformData(command_buffer, 0, matrix_view_projection, sizeof(matrix_view_projection));
+            SDL_PushGPUVertexUniformData(command_buffer, 0, view_projection, sizeof(view_projection));
 
             // draw
             SDL_DrawGPUIndexedPrimitives(render_pass, 36, 1, 0, 0, 0);
@@ -678,7 +715,7 @@ SDL_AppResult SDL_AppIterate(void* appstate)
 
     SDL_SubmitGPUCommandBuffer(command_buffer);
 
-#if 0
+#ifdef NUKLEAR
     nk_input_end(app->ctx);
 
     float w = 0.0f;
@@ -733,6 +770,7 @@ void SDL_AppQuit(void* appstate, const SDL_AppResult result)
         nk_input_end(app->ctx);
         nk_sdl_shutdown(app->ctx);
 #endif
+        SDL_DestroyMutex(app->mouse_mutex);
         SDL_ReleaseGPUGraphicsPipeline(app->device, app->pipeline);
         SDL_ReleaseGPUBuffer(app->device, app->buffer_index);
         SDL_ReleaseGPUBuffer(app->device, app->buffer_vertex);
@@ -751,6 +789,4 @@ void SDL_AppQuit(void* appstate, const SDL_AppResult result)
     {
         log_fat("exit failure");
     }
-
-
 }
