@@ -5,9 +5,15 @@
 
 #include "camera.h"
 
+#include "shaders/embed/vertex.c"
+#include "shaders/embed/pixel.c"
+
 #define WINDOW_TITLE  "cui"
 #define WINDOW_WIDTH  1920
 #define WINDOW_HEIGHT 1080
+
+#define MAX_VERTEX_BUFFER (512 * 1024)
+#define MAX_INDEX_BUFFER  (128 * 1024)
 
 #define COLOR_RED    "\033[0;31m"
 #define COLOR_CYAN   "\033[0;36m"
@@ -65,10 +71,11 @@ do {                                                                            
 #define log_err(fmt, ...) log_(SDL_LOG_PRIORITY_ERROR,    " ERROR ", COLOR_ORANGE, fmt, ##__VA_ARGS__)
 #define log_fat(fmt, ...) log_(SDL_LOG_PRIORITY_CRITICAL, " FATAL ", COLOR_RED,    fmt, ##__VA_ARGS__)
 
+#define NUKLEAR
+
 struct nk_sdl_app {
     SDL_GPUDevice* device;
     SDL_Window* window;
-    SDL_Renderer* renderer;
     SDL_GPUGraphicsPipeline* pipeline;
     SDL_GPUBuffer* buffer_vertex;
     SDL_GPUBuffer* buffer_index;
@@ -94,8 +101,6 @@ typedef struct vertex_position_color {
     position position;
     color color;
 } vertex_position_color;
-
-// #define NUKLEAR
 
 SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
 {
@@ -158,20 +163,10 @@ SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
         return SDL_APP_FAILURE;
     }
 
-    // read vertex shader code
-    size_t shader_vertex_code_size = 0;
-    void* shader_vertex_code = SDL_LoadFile("shaders/vertex.dxil", &shader_vertex_code_size);
-    if (NULL == shader_vertex_code)
-    {
-        log_fat("vertex shader code load failed: %s", SDL_GetError());
-        return SDL_APP_FAILURE;
-    }
-    log_dbg("vertex shader size: %zu", shader_vertex_code_size);
-
     // upload vertex shader program
     const SDL_GPUShaderCreateInfo shader_vertex_create_info = {
-        .code_size = shader_vertex_code_size,
-        .code = shader_vertex_code,
+        .code_size = sizeof(embed_vertex),
+        .code = embed_vertex,
         .entrypoint = "vs_main",
         .format = gpu_format,
         .stage = SDL_GPU_SHADERSTAGE_VERTEX,
@@ -183,27 +178,16 @@ SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
     };
 
     SDL_GPUShader* gpu_shader_vertex = SDL_CreateGPUShader(app->device, &shader_vertex_create_info);
-    SDL_free(shader_vertex_code);
     if (NULL == gpu_shader_vertex)
     {
         log_fat("create gpu shader vertex failed: %s", SDL_GetError());
         return SDL_APP_FAILURE;
     }
 
-    // read pixel shader code
-    size_t shader_pixel_code_size = 0;
-    void* shader_pixel_code = SDL_LoadFile("shaders/pixel.dxil", &shader_pixel_code_size);
-    if (NULL == shader_pixel_code)
-    {
-        log_fat("vertex shader code load failed: %s", SDL_GetError());
-        return SDL_APP_FAILURE;
-    }
-    log_dbg("pixel shader size: %zu", shader_pixel_code_size);
-
     // upload pixel shader program
     const SDL_GPUShaderCreateInfo shader_pixel_create_info = {
-        .code_size = shader_pixel_code_size,
-        .code = shader_pixel_code,
+        .code_size = sizeof(embed_pixel),
+        .code = embed_pixel,
         .entrypoint = "ps_main",
         .format = gpu_format,
         .stage = SDL_GPU_SHADERSTAGE_FRAGMENT,
@@ -215,8 +199,6 @@ SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
     };
 
     SDL_GPUShader* gpu_shader_pixel = SDL_CreateGPUShader(app->device, &shader_pixel_create_info);
-    SDL_free(shader_pixel_code);
-
     if (NULL == gpu_shader_pixel)
     {
         log_fat("create gpu shader pixel failed: %s", SDL_GetError());
@@ -467,19 +449,9 @@ SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
     app->bg.b = 0.24f;
     app->bg.a = 1.0f;
 
-#ifdef NUKLEAR
     float font_scale = 1.0f;
-    {
-        /* This scaling logic was kept simple for the demo purpose.
-         * On some platforms, this might not be the exact scale
-         * that you want to use. For more information, see:
-         * https://wiki.libsdl.org/SDL3/README-highdpi */
-        const float scale = SDL_GetWindowDisplayScale(app->window);
-        SDL_SetRenderScale(app->renderer, scale, scale);
-        font_scale = scale;
-    }
 
-    app->ctx = nk_sdl_init(app->window, app->renderer, nk_sdl_allocator());
+    app->ctx = nk_sdl_init(app->window, app->device, nk_sdl_allocator(), MAX_VERTEX_BUFFER, MAX_INDEX_BUFFER);
 
     /* set up the font atlas and add desired font; note that font sizes are
      * multiplied by font_scale to produce better results at higher DPIs */
@@ -506,7 +478,6 @@ SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
     app->AA = NK_ANTI_ALIASING_ON;
 
     nk_input_begin(app->ctx);
-#endif
 
     app->camera = (camera) {
         .position = { 0.0f, 0.0f, 10.0f },
@@ -584,6 +555,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event* event)
                 }
                 SDL_UnlockMutex(app->mouse_mutex);
             }
+            break;
         }
 
         case SDL_EVENT_KEY_DOWN:
@@ -617,12 +589,10 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event* event)
     }
 
 
-#ifdef NUKLEAR
     /* Remember to always rescale the event coordinates,
      * if your renderer uses custom scale. */
-    SDL_ConvertEventToRenderCoordinates(app->renderer, event);
+    // SDL_ConvertEventToRenderCoordinates(app->renderer, event);
     nk_sdl_handle_event(app->ctx, event);
-#endif
 
     return SDL_APP_CONTINUE;
 }
@@ -650,7 +620,7 @@ SDL_AppResult SDL_AppIterate(void* appstate)
     const double time_delta = (double)(ticks_current - ticks_last) / 1e9;
     ticks_last = ticks_current;
 
-    log_dbg("dt: %.6f", time_delta);
+    // log_dbg("dt: %.6f", time_delta);
 
     camera_update(&app->camera, mouse_delta);
 
@@ -690,17 +660,11 @@ SDL_AppResult SDL_AppIterate(void* appstate)
         SDL_GPURenderPass* render_pass = SDL_BeginGPURenderPass(command_buffer, &color_target_info, 1, NULL);
         {
             // bind vertex buffer
-            const SDL_GPUBufferBinding buffer_vertex_binding = {
-                .buffer = app->buffer_vertex,
-                .offset = 0,
-            };
+            const SDL_GPUBufferBinding buffer_vertex_binding = { .buffer = app->buffer_vertex, .offset = 0, };
             SDL_BindGPUVertexBuffers(render_pass, 0, &buffer_vertex_binding, 1);
 
             // bind index buffer
-            const SDL_GPUBufferBinding buffer_index_binding = {
-                .buffer = app->buffer_index,
-                .offset = 0,
-            };
+            const SDL_GPUBufferBinding buffer_index_binding = { .buffer = app->buffer_index, .offset = 0, };
             SDL_BindGPUIndexBuffer(render_pass, &buffer_index_binding, SDL_GPU_INDEXELEMENTSIZE_16BIT);
 
             // bind graphics pipeline
@@ -715,7 +679,6 @@ SDL_AppResult SDL_AppIterate(void* appstate)
 
     SDL_SubmitGPUCommandBuffer(command_buffer);
 
-#ifdef NUKLEAR
     nk_input_end(app->ctx);
 
     float w = 0.0f;
@@ -732,31 +695,29 @@ SDL_AppResult SDL_AppIterate(void* appstate)
         h = (float)height;
     }
 
+    nk_style_push_style_item(app->ctx, &app->ctx->style.window.fixed_background, nk_style_item_color((struct nk_color){0}));
+
     /* GUI */
     if (nk_begin(app->ctx, "cui", nk_rect(0, 0, w, h), NK_WINDOW_NO_SCROLLBAR))
     {
-        nk_layout_row_dynamic(app->ctx, 36.0f, 1);
+        nk_layout_row_dynamic(app->ctx, 42.0f, 1);
         nk_button_label(app->ctx, "test");
     }
     nk_end(app->ctx);
 
-    if (nk_sdl_render_needed(app->ctx))
+    nk_style_pop_style_item(app->ctx);
+
+    // if (nk_sdl_render_needed(app->ctx))
     {
-        static size_t count = 0;
-        ++count;
-        log_dbg("redraw count: %zu", count);
+        // static size_t count = 0;
+        // ++count;
+        // log_dbg("redraw count: %zu", count);
 
-        SDL_SetRenderDrawColorFloat(app->renderer, app->bg.r, app->bg.g, app->bg.b, app->bg.a);
-        SDL_RenderClear(app->renderer);
-
-        nk_sdl_render(app->ctx, app->AA);
+        nk_sdl_render(app->ctx, app->AA, (struct nk_colorf){0});
         nk_sdl_update_text_input(app->ctx);
-
-        SDL_RenderPresent(app->renderer);
     }
 
     nk_input_begin(app->ctx);
-#endif
     return SDL_APP_CONTINUE;
 }
 
@@ -766,10 +727,8 @@ void SDL_AppQuit(void* appstate, const SDL_AppResult result)
 
     if (NULL != app)
     {
-#if 0
         nk_input_end(app->ctx);
         nk_sdl_shutdown(app->ctx);
-#endif
         SDL_DestroyMutex(app->mouse_mutex);
         SDL_ReleaseGPUGraphicsPipeline(app->device, app->pipeline);
         SDL_ReleaseGPUBuffer(app->device, app->buffer_index);
