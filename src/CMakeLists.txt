@@ -1,53 +1,68 @@
 cmake_minimum_required(VERSION 4.0.0)
 project(cui LANGUAGES C)
 
-cmake_path(SET shader_vertex_source   NORMALIZE "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vertex.hlsl")
-cmake_path(SET shader_vertex_output   NORMALIZE "${CMAKE_CURRENT_BINARY_DIR}/shaders/vertex.dxil")
-cmake_path(SET shader_vertex_generate NORMALIZE "${CMAKE_CURRENT_BINARY_DIR}/shaders/vertex.h")
-cmake_path(SET shader_pixel_source    NORMALIZE "${CMAKE_CURRENT_SOURCE_DIR}/shaders/pixel.hlsl")
-cmake_path(SET shader_pixel_output    NORMALIZE "${CMAKE_CURRENT_BINARY_DIR}/shaders/pixel.dxil")
-cmake_path(SET shader_pixel_generate  NORMALIZE "${CMAKE_CURRENT_BINARY_DIR}/shaders/pixel.h")
 
-cmake_path(SET shader_embed NORMALIZE "${CMAKE_CURRENT_SOURCE_DIR}/shaders/embed.py")
+list(APPEND shader_sources "shader/world/hlsl/vertex.hlsl")
+list(APPEND shader_sources "shader/world/hlsl/pixel.hlsl")
+list(APPEND shader_sources "shader/gui/hlsl/vertex.hlsl")
+list(APPEND shader_sources "shader/gui/hlsl/pixel.hlsl")
 
-add_custom_command(
-        OUTPUT ${shader_vertex_output}
-        COMMAND dxc.exe -T vs_6_0 -E vs_main -Fo ${shader_vertex_output} ${shader_vertex_source}
-        DEPENDS ${shader_vertex_source}
-        COMMENT "compiling vertex shader: ${shader_vertex_source} -> ${shader_vertex_output}"
-        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-        VERBATIM
-)
+foreach(shader IN LISTS shader_sources)
+    cmake_path(SET shader_source NORMALIZE "${CMAKE_CURRENT_SOURCE_DIR}/${shader}")
+    cmake_path(SET shader_embed  NORMALIZE "${CMAKE_CURRENT_BINARY_DIR}/${shader}.c")
 
-add_custom_command(
-        OUTPUT ${shader_pixel_output}
-        COMMAND dxc.exe -T ps_6_0 -E ps_main -Fo ${shader_pixel_output} ${shader_pixel_source}
-        DEPENDS ${shader_pixel_source}
-        COMMENT "compiling pixel shader: ${shader_pixel_source} -> ${shader_pixel_output}"
-        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-        VERBATIM
-)
+    cmake_path(GET shader_source             PARENT_PATH shader_language_directory)
+    cmake_path(GET shader_language_directory PARENT_PATH shader_pipeline_directory)
 
-add_custom_command(
-        OUTPUT ${shader_vertex_generate} ${shader_pixel_generate}
-        COMMAND uv run ${shader_embed} --files ${shader_vertex_output} ${shader_pixel_output}
-        DEPENDS ${shader_embed} ${shader_vertex_output} ${shader_pixel_output}
-        COMMENT "embedding shaders ${shader_vertex_output} -> ${shader_vertex_generate}, ${shader_pixel_output} -> ${shader_pixel_generate}"
-        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-        VERBATIM
-)
+    cmake_path(GET shader_source             STEM     shader_stage)
+    cmake_path(GET shader_language_directory FILENAME shader_language)
+    cmake_path(GET shader_pipeline_directory FILENAME shader_pipeline)
 
-set(shaders_embedded ${shader_vertex_generate} ${shader_pixel_generate})
-add_custom_target(cui_shaders DEPENDS ${shaders_embedded})
+    set(shader_variable_name shader_${shader_pipeline}_${shader_stage}_${shader_language})
+
+#    message(STATUS "shader source: ${shader_source}")
+#    message(STATUS "shader stage: ${shader_stage}")
+#    message(STATUS "shader language: ${shader_language}")
+#    message(STATUS "shader pipeline: ${shader_pipeline}")
+    message(STATUS "shader source: ${shader_source}")
+    message(STATUS "shader embed: ${shader_embed}")
+    message(STATUS "shader variable name: ${shader_variable_name}")
+
+    # call xxd on vertex shader to embed into .c file
+    add_custom_command(
+            OUTPUT ${shader_embed}
+            # TODO: windows xxd does not have -t option for null termination...
+            COMMAND xxd -i -n ${shader_variable_name} ${shader_source} ${shader_embed}
+            DEPENDS ${shader_source}
+            COMMENT "embedding shader ${shader_source} -> ${shader_embed}"
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+            VERBATIM
+    )
+
+    list(APPEND shader_embeds ${shader_embed})
+endforeach()
 
 add_executable(${PROJECT_NAME})
 
-add_dependencies(${PROJECT_NAME} cui_shaders)
-
 target_sources(${PROJECT_NAME}
         PRIVATE
-            main.c
-            camera.c
+            ${CMAKE_CURRENT_SOURCE_DIR}/main.c
+            ${CMAKE_CURRENT_SOURCE_DIR}/camera.c
+            ${CMAKE_CURRENT_SOURCE_DIR}/gui.c
+
+            # shader
+            ${CMAKE_CURRENT_SOURCE_DIR}/shader.c
+            # shader programs
+            ${shader_embeds}
+)
+
+# expose nuklear header
+target_sources(${PROJECT_NAME}
+        PUBLIC
+        FILE_SET nuklear_HEADERS
+        TYPE HEADERS
+        BASE_DIRS ${nuklear_SOURCE_DIR}
+        FILES ${nuklear_SOURCE_DIR}/nuklear.h
 )
 
 set_target_properties(${PROJECT_NAME}
@@ -55,13 +70,18 @@ set_target_properties(${PROJECT_NAME}
             C_STANDARD 99
             C_STANDARD_REQUIRED ON
             C_EXTENSIONS ON
+            POSITION_INDEPENDENT_CODE ON
 )
 
-
-target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(${PROJECT_NAME}
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_CURRENT_BINARY_DIR}
+)
 
 target_link_libraries(${PROJECT_NAME}
         PRIVATE
-            nuklear_sdl::nuklear_sdl
             cglm_headers
+            SDL3::SDL3
+            SDL3_shadercross::SDL3_shadercross
 )

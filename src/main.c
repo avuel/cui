@@ -1,12 +1,14 @@
+// cui includes
+#include "camera.h"
+#include "gui.h"
+#include "log.h"
+#include "shader.h"
+#include "shader/world/hlsl/pixel.hlsl.h"
+#include "shader/world/hlsl/vertex.hlsl.h"
+
+// third party includes
 #define SDL_MAIN_USE_CALLBACKS
 #include <SDL3/SDL_main.h>
-#include <SDL3/SDL_gpu.h>
-#include <nuklear_sdl_renderer.h>
-
-#include "camera.h"
-
-#include "shaders/embed/vertex.c"
-#include "shaders/embed/pixel.c"
 
 #define WINDOW_TITLE  "cui"
 #define WINDOW_WIDTH  1920
@@ -15,65 +17,9 @@
 #define MAX_VERTEX_BUFFER (512 * 1024)
 #define MAX_INDEX_BUFFER  (128 * 1024)
 
-#define COLOR_RED    "\033[0;31m"
-#define COLOR_CYAN   "\033[0;36m"
-#define COLOR_WHITE  "\033[38;5;252m"
-#define COLOR_YELLOW "\033[38;5;220m"
-#define COLOR_ORANGE "\033[38;5;208m"
-#define COLOR_RESET  "\033[0m"
+#define VULKAN
 
-#define log_(lvl, typ, col, fmt, ...)                                                                                                                                                             \
-do {                                                                                                                                                                                              \
-    SDL_Time ns__ = { 0 };                                                                                                                                                                        \
-    if (SDL_GetCurrentTime(&ns__))                                                                                                                                                                \
-    {                                                                                                                                                                                             \
-        SDL_DateTime dt__ = { 0 };                                                                                                                                                                \
-        SDL_TimeToDateTime(ns__, &dt__, true);                                                                                                                                                    \
-        const int ms__ = SDL_NS_TO_MS(dt__.nanosecond);                                                                                                                                           \
-                                                                                                                                                                                                  \
-        const char time__[] = {                                                                                                                                                                   \
-            (char)('0' +  dt__.month / 10),                                                                                                                                                       \
-            (char)('0' +  dt__.month % 10),                                                                                                                                                       \
-            '-',                                                                                                                                                                                  \
-            (char)('0' +  dt__.day / 10),                                                                                                                                                         \
-            (char)('0' +  dt__.day % 10),                                                                                                                                                         \
-            '-',                                                                                                                                                                                  \
-            (char)('0' + dt__.year / 1000),                                                                                                                                                       \
-            (char)('0' + dt__.year % 1000 / 100),                                                                                                                                                 \
-            (char)('0' + dt__.year %  100 / 10),                                                                                                                                                  \
-            (char)('0' + dt__.year %   10),                                                                                                                                                       \
-            ' ',                                                                                                                                                                                  \
-            (char)('0' +  dt__.hour / 10),                                                                                                                                                        \
-            (char)('0' +  dt__.hour % 10),                                                                                                                                                        \
-            ':',                                                                                                                                                                                  \
-            (char)('0' +  dt__.minute / 10),                                                                                                                                                      \
-            (char)('0' +  dt__.minute % 10),                                                                                                                                                      \
-            ':',                                                                                                                                                                                  \
-            (char)('0' +  dt__.second / 10),                                                                                                                                                      \
-            (char)('0' +  dt__.second % 10),                                                                                                                                                      \
-            '.',                                                                                                                                                                                  \
-            (char)('0' + ms__ / 100),                                                                                                                                                             \
-            (char)('0' + ms__ % 100 / 10),                                                                                                                                                        \
-            (char)('0' + ms__ % 10),                                                                                                                                                              \
-            '\0',                                                                                                                                                                                 \
-        };                                                                                                                                                                                        \
-        SDL_LogMessage(SDL_LOG_CATEGORY_CUSTOM, lvl, col "[%s] " typ " [%" PRIu64 "] %s:%d: " fmt COLOR_RESET, time__, SDL_GetCurrentThreadID(), __FILE__, __LINE__, ##__VA_ARGS__);              \
-    }                                                                                                                                                                                             \
-    else                                                                                                                                                                                          \
-    {                                                                                                                                                                                             \
-        SDL_LogMessage(SDL_LOG_CATEGORY_CUSTOM, lvl, col "[-----INVALID--TIME-----] " typ " [%" PRIu64 "] %s:%d: " fmt COLOR_RESET, SDL_GetCurrentThreadID(), __FILE__, __LINE__, ##__VA_ARGS__); \
-    }                                                                                                                                                                                             \
-} while (0)
-
-#define log_dbg(fmt, ...) log_(SDL_LOG_PRIORITY_DEBUG,    " DEBUG ", COLOR_CYAN,   fmt, ##__VA_ARGS__)
-#define log_msg(fmt, ...) log_(SDL_LOG_PRIORITY_INFO,     "MESSAGE", COLOR_WHITE,  fmt, ##__VA_ARGS__)
-#define log_wrn(fmt, ...) log_(SDL_LOG_PRIORITY_WARN,     "WARNING", COLOR_YELLOW, fmt, ##__VA_ARGS__)
-#define log_err(fmt, ...) log_(SDL_LOG_PRIORITY_ERROR,    " ERROR ", COLOR_ORANGE, fmt, ##__VA_ARGS__)
-#define log_fat(fmt, ...) log_(SDL_LOG_PRIORITY_CRITICAL, " FATAL ", COLOR_RED,    fmt, ##__VA_ARGS__)
-
-#define NUKLEAR
-
-struct nk_sdl_app {
+struct cui_app {
     SDL_GPUDevice* device;
     SDL_Window* window;
     SDL_GPUGraphicsPipeline* pipeline;
@@ -126,7 +72,9 @@ SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
         return SDL_APP_FAILURE;
     }
 
-    struct nk_sdl_app* app = SDL_malloc(sizeof(*app));
+    *appstate = SDL_malloc(sizeof(struct cui_app));
+
+     struct cui_app* app = *appstate;
 
     if (NULL == app)
     {
@@ -134,14 +82,25 @@ SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
         return SDL_APP_FAILURE;
     }
 
-#ifdef _WIN32
-    const SDL_GPUShaderFormat gpu_format = SDL_GPU_SHADERFORMAT_DXIL;
-    const char* const gpu_driver = "direct3d12";
+    /* TODO: should we pass NULL and let sdl pick driver... */
+#if defined(_WIN32)
+    /* TODO: vulkan performance seems a lot faster directx... */
+#ifdef VULKAN
+    const char* const gpu_driver = "vulkan";
 #else
-    const SDL_GPUShaderFormat gpu_format = SDL_GPU_SHADERFORMAT_SPIRV;
-    const char* const driver = "vulkan";
+    const char* const gpu_driver = "direct3d12";
+#endif // VULKAN
+#elif defined(__linux__)
+    const char* const gpu_driver = "vulkan";
+#elif defined(__APPLE__) && defined(__MACH__)
+    const char* const gpu_driver = "metal";
+#else
+#error "unknown platform"
 #endif
-    app->device = SDL_CreateGPUDevice(gpu_format, true, gpu_driver);
+
+    const SDL_GPUShaderFormat gpu_formats = nk_sdl_get_shader_formats();
+
+    app->device = SDL_CreateGPUDevice(gpu_formats, true, gpu_driver);
     if (NULL == app->device)
     {
         log_fat("create gpu device failed: %s", SDL_GetError());
@@ -155,59 +114,74 @@ SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
         return SDL_APP_FAILURE;
     }
 
-    *appstate = app;
-
     if (!SDL_ClaimWindowForGPUDevice(app->device, app->window))
     {
         log_fat("claim window for gpu device failed: %s", SDL_GetError());
         return SDL_APP_FAILURE;
     }
 
-    // upload vertex shader program
-    const SDL_GPUShaderCreateInfo shader_vertex_create_info = {
-        .code_size = sizeof(embed_vertex),
-        .code = embed_vertex,
-        .entrypoint = "vs_main",
-        .format = gpu_format,
-        .stage = SDL_GPU_SHADERSTAGE_VERTEX,
-        .num_samplers = 0,
-        .num_storage_textures = 0,
-        .num_storage_buffers = 0,
-        .num_uniform_buffers = 1,
-        .props = 0,
-    };
-
-    SDL_GPUShader* gpu_shader_vertex = SDL_CreateGPUShader(app->device, &shader_vertex_create_info);
-    if (NULL == gpu_shader_vertex)
+    if (!SDL_ShaderCross_Init())
     {
-        log_fat("create gpu shader vertex failed: %s", SDL_GetError());
+        log_fat("SDL_ShaderCross_Init failed: %s", SDL_GetError());
         return SDL_APP_FAILURE;
     }
 
-    // upload pixel shader program
-    const SDL_GPUShaderCreateInfo shader_pixel_create_info = {
-        .code_size = sizeof(embed_pixel),
-        .code = embed_pixel,
-        .entrypoint = "ps_main",
-        .format = gpu_format,
-        .stage = SDL_GPU_SHADERSTAGE_FRAGMENT,
-        .num_samplers = 0,
-        .num_storage_textures = 0,
-        .num_storage_buffers = 0,
-        .num_uniform_buffers = 0,
+    char* shader_world_vertex_program = shader_program_load(shader_world_vertex_hlsl, shader_world_vertex_hlsl_len);
+    if (NULL == shader_world_vertex_program)
+    {
+        log_fat("world vertex shader program load failed");
+        return SDL_APP_FAILURE;
+    }
+
+    const SDL_ShaderCross_HLSL_Info shader_world_vertex_info = {
+        .source = shader_world_vertex_program,
+        .entrypoint = "main",
+        .include_dir = NULL,
+        .defines = NULL,
+        .shader_stage = SDL_SHADERCROSS_SHADERSTAGE_VERTEX,
         .props = 0,
     };
 
-    SDL_GPUShader* gpu_shader_pixel = SDL_CreateGPUShader(app->device, &shader_pixel_create_info);
-    if (NULL == gpu_shader_pixel)
+    SDL_GPUShader* shader_world_vertex = shader_create_hlsl(app->device, &shader_world_vertex_info);
+    SDL_free(shader_world_vertex_program);
+
+    if (NULL == shader_world_vertex)
     {
-        log_fat("create gpu shader pixel failed: %s", SDL_GetError());
+        log_fat("world vertex shader creation failed");
+        return SDL_APP_FAILURE;
+    }
+
+    char* shader_world_pixel_program = shader_program_load(shader_world_pixel_hlsl, shader_world_pixel_hlsl_len);
+
+    if (NULL == shader_world_pixel_program)
+    {
+        SDL_ReleaseGPUShader(app->device, shader_world_vertex);
+        log_fat("world pixel shader program load failed");
+        return SDL_APP_FAILURE;
+    }
+
+    const SDL_ShaderCross_HLSL_Info shader_world_pixel_info = {
+        .source = shader_world_pixel_program,
+        .entrypoint = "main",
+        .include_dir = NULL,
+        .defines = NULL,
+        .shader_stage = SDL_SHADERCROSS_SHADERSTAGE_FRAGMENT,
+        .props = 0,
+    };
+
+    SDL_GPUShader* shader_world_pixel = shader_create_hlsl(app->device, &shader_world_pixel_info);
+    SDL_free(shader_world_pixel_program);
+
+    if (NULL == shader_world_pixel)
+    {
+        SDL_ReleaseGPUShader(app->device, shader_world_vertex);
+        log_fat("world pixel shader creation failed");
         return SDL_APP_FAILURE;
     }
 
     const SDL_GPUGraphicsPipelineCreateInfo graphics_pipeline_create_info = {
-        .vertex_shader   = gpu_shader_vertex,
-        .fragment_shader = gpu_shader_pixel,
+        .vertex_shader   = shader_world_vertex,
+        .fragment_shader = shader_world_pixel,
         .primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
         .vertex_input_state = {
             .num_vertex_buffers = 1,
@@ -270,8 +244,8 @@ SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
     app->pipeline = SDL_CreateGPUGraphicsPipeline(app->device, &graphics_pipeline_create_info);
 
     // free shaders after creating pipeline
-    SDL_ReleaseGPUShader(app->device, gpu_shader_vertex);
-    SDL_ReleaseGPUShader(app->device, gpu_shader_pixel);
+    SDL_ReleaseGPUShader(app->device, shader_world_vertex);
+    SDL_ReleaseGPUShader(app->device, shader_world_pixel);
 
     if (NULL == app->pipeline)
     {
@@ -514,7 +488,7 @@ SDL_AppResult SDL_AppInit(void** appstate, const int argc, char* argv[])
 
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event* event)
 {
-    struct nk_sdl_app* app = appstate;
+    struct cui_app* app = appstate;
 
     static bool middle_down = false;
     static vec2 mouse_position = { 0 };
@@ -605,7 +579,7 @@ SDL_AppResult SDL_AppIterate(void* appstate)
     //     log_dbg("update %zu", count);
     // }
 
-    struct nk_sdl_app* app = appstate;
+    struct cui_app* app = appstate;
 
     vec2 mouse_delta = { 0 };
     {
@@ -620,7 +594,7 @@ SDL_AppResult SDL_AppIterate(void* appstate)
     const double time_delta = (double)(ticks_current - ticks_last) / 1e9;
     ticks_last = ticks_current;
 
-    // log_dbg("dt: %.6f", time_delta);
+    log_dbg("dt: %.6f", time_delta);
 
     camera_update(&app->camera, mouse_delta);
 
@@ -701,7 +675,9 @@ SDL_AppResult SDL_AppIterate(void* appstate)
     if (nk_begin(app->ctx, "cui", nk_rect(0, 0, w, h), NK_WINDOW_NO_SCROLLBAR))
     {
         nk_layout_row_dynamic(app->ctx, 42.0f, 1);
-        nk_button_label(app->ctx, "test");
+        static char label_fps[64] = { 0 };
+        snprintf(label_fps, sizeof(label_fps), "fps: %.3f", 1.0 / time_delta);
+        nk_label(app->ctx, label_fps, NK_TEXT_CENTERED);
     }
     nk_end(app->ctx);
 
@@ -713,7 +689,14 @@ SDL_AppResult SDL_AppIterate(void* appstate)
         // ++count;
         // log_dbg("redraw count: %zu", count);
 
+        const Uint64 beg  = SDL_GetTicksNS();
         nk_sdl_render(app->ctx, app->AA, (struct nk_colorf){0});
+        const Uint64 end  = SDL_GetTicksNS();
+        const double diff = (double)(end - beg);
+        const double dt   = diff / 1e6;
+        const double fps  = 1e9  / diff;
+        log_dbg("(frame time, fps) = (%.3f, %.3f)", dt, fps);
+
         nk_sdl_update_text_input(app->ctx);
     }
 
@@ -723,7 +706,7 @@ SDL_AppResult SDL_AppIterate(void* appstate)
 
 void SDL_AppQuit(void* appstate, const SDL_AppResult result)
 {
-    struct nk_sdl_app* app = appstate;
+    struct cui_app* app = appstate;
 
     if (NULL != app)
     {
@@ -738,6 +721,9 @@ void SDL_AppQuit(void* appstate, const SDL_AppResult result)
         SDL_DestroyGPUDevice(app->device);
         SDL_free(app);
     }
+
+    SDL_ShaderCross_Quit();
+    SDL_Quit();
 
     if (SDL_APP_SUCCESS == result)
     {

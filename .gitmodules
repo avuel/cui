@@ -1,6 +1,3 @@
-[submodule "vendor/nuklear_sdl"]
-	path = vendor/nuklear_sdl
-	url = git@github.com:avuel/nuklear_sdl.git
 [submodule "vendor/cglm"]
 	path = vendor/cglm
 	url = https://github.com/recp/cglm.git
