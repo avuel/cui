@@ -317,6 +317,7 @@ NK_INTERN void nk_sdl_device_create(struct nk_sdl* sdl)
     sdl->device.buffer_vertex = SDL_CreateGPUBuffer(sdl->device.gpu, &buffer_vertex_create_info);
     if (NULL == sdl->device.buffer_vertex)
     {
+        SDL_ReleaseGPUGraphicsPipeline(sdl->device.gpu, sdl->device.pipeline);
         NK_ASSERT(!"vertex buffer creation failed");
     }
 
@@ -329,6 +330,8 @@ NK_INTERN void nk_sdl_device_create(struct nk_sdl* sdl)
     sdl->device.buffer_index = SDL_CreateGPUBuffer(sdl->device.gpu, &buffer_index_create_info);
     if (NULL == sdl->device.buffer_index)
     {
+        SDL_ReleaseGPUBuffer(sdl->device.gpu, sdl->device.buffer_vertex);
+        SDL_ReleaseGPUGraphicsPipeline(sdl->device.gpu, sdl->device.pipeline);
         NK_ASSERT(!"index buffer creation failed");
     }
 
@@ -341,6 +344,9 @@ NK_INTERN void nk_sdl_device_create(struct nk_sdl* sdl)
     sdl->device.buffer_transfer = SDL_CreateGPUTransferBuffer(sdl->device.gpu, &gpu_transfer_buffer_create_info);
     if (NULL == sdl->device.buffer_transfer)
     {
+        SDL_ReleaseGPUBuffer(sdl->device.gpu, sdl->device.buffer_index);
+        SDL_ReleaseGPUBuffer(sdl->device.gpu, sdl->device.buffer_vertex);
+        SDL_ReleaseGPUGraphicsPipeline(sdl->device.gpu, sdl->device.pipeline);
         NK_ASSERT(!"transfer buffer creation failed");
     }
 
@@ -363,7 +369,16 @@ NK_INTERN void nk_sdl_device_create(struct nk_sdl* sdl)
 
         .props = 0,
     };
+
     sdl->device.font_sampler = SDL_CreateGPUSampler(sdl->device.gpu, &sampler_create_info);
+    if (NULL == sdl->device.font_sampler)
+    {
+        SDL_ReleaseGPUTransferBuffer(sdl->device.gpu, sdl->device.buffer_transfer);
+        SDL_ReleaseGPUBuffer(sdl->device.gpu, sdl->device.buffer_index);
+        SDL_ReleaseGPUBuffer(sdl->device.gpu, sdl->device.buffer_vertex);
+        SDL_ReleaseGPUGraphicsPipeline(sdl->device.gpu, sdl->device.pipeline);
+        NK_ASSERT("font sample creation failed");
+    }
 }
 
 NK_INTERN void nk_sdl_device_destroy(struct nk_sdl* sdl)
